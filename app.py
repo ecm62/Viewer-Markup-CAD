@@ -55,9 +55,8 @@ if uploaded_file is not None:
                         }
                     })
                     
-                    # 暫存 DWG 並上傳
-                    upload_task_id = job['tasks'][0]['id']
-                    upload_task = cloudconvert.Task.find(id=upload_task_id)
+                    # 動態尋找「上傳」任務 (防呆：不依賴陣列順序)
+                    upload_task = next(task for task in job['tasks'] if task['name'] == 'import-file')
                     
                     with tempfile.NamedTemporaryFile(delete=False, suffix=".dwg") as tmp:
                         tmp.write(uploaded_file.getvalue())
@@ -68,7 +67,15 @@ if uploaded_file is not None:
                     
                     # 等待伺服器運算完成
                     job = cloudconvert.Job.wait(id=job['id'])
-                    export_task = job['tasks'][2]
+                    
+                    # 動態尋找「匯出」任務，並加入嚴格的防呆判定
+                    export_task = next((task for task in job['tasks'] if task['name'] == 'export-file'), None)
+                    
+                    if export_task is None or export_task.get('status') == 'error':
+                        raise Exception("雲端引擎回報錯誤，可能是此 DWG 檔案格式不支援或已損壞。")
+                        
+                    if 'result' not in export_task or 'files' not in export_task['result']:
+                        raise Exception("伺服器未產生有效的下載連結。")
                     
                     # 下載轉換好的 PDF 到記憶體中
                     file_url = export_task['result']['files'][0]['url']
@@ -77,7 +84,7 @@ if uploaded_file is not None:
                     st.success("✅ DWG 轉換成功！")
                     
                 except Exception as e:
-                    st.error(f"❌ 轉換失敗，請檢查 API Key 或網路狀態。錯誤代碼：{str(e)}")
+                    st.error(f"❌ 轉換失敗。錯誤細節：{str(e)}")
 
     # 邏輯分支 B：直接處理原生 PDF
     elif file_ext == "pdf":
@@ -85,24 +92,30 @@ if uploaded_file is not None:
 
     # --- 4. 影像光柵化與分頁控制器 ---
     if pdf_stream is not None:
-        doc = fitz.open(stream=pdf_stream.read(), filetype="pdf")
-        total_pages = doc.page_count
-        
-        st.sidebar.markdown("---")
-        st.sidebar.subheader("📄 PDF 分頁控制器")
-        selected_page = st.sidebar.number_input(
-            f"目前選擇頁面 (總頁數: {total_pages})", 
-            min_value=1, max_value=total_pages, value=1
-        )
-        
-        # 物理限制：將 PDF 向量轉換為像素圖片供畫布使用
-        page = doc.load_page(selected_page - 1)
-        pix = page.get_pixmap(dpi=150)
-        img = Image.frombytes("RGB", [pix.width, pix.height], pix.samples)
+        try:
+            doc = fitz.open(stream=pdf_stream.read(), filetype="pdf")
+            total_pages = doc.page_count
+            
+            st.sidebar.markdown("---")
+            st.sidebar.subheader("📄 PDF 分頁控制器")
+            selected_page = st.sidebar.number_input(
+                f"目前選擇頁面 (總頁數: {total_pages})", 
+                min_value=1, max_value=total_pages, value=1
+            )
+            
+            # 物理限制：將 PDF 向量轉換為像素圖片供畫布使用
+            page = doc.load_page(selected_page - 1)
+            pix = page.get_pixmap(dpi=150)
+            img = Image.frombytes("RGB", [pix.width, pix.height], pix.samples)
+        except Exception as e:
+            st.error(f"❌ PDF 讀取失敗。錯誤細節：{str(e)}")
         
     # 邏輯分支 C：處理一般圖片
     elif file_ext in ["png", "jpg", "jpeg"]:
-        img = Image.open(uploaded_file)
+        try:
+            img = Image.open(uploaded_file)
+        except Exception as e:
+            st.error(f"❌ 圖片讀取失敗。錯誤細節：{str(e)}")
         
     # --- 5. 繪圖標註與畫布渲染 ---
     if img is not None:
