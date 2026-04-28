@@ -4,3 +4,4 @@ streamlit-drawable-canvas
 Pillow
 cloudconvert
 requests
+ezdxf
