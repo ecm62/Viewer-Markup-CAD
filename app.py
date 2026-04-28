@@ -141,25 +141,72 @@ if uploaded_file is not None:
             key="canvas",
         )
 
-        # --- 6. 專業防呆匯出 (底圖與標註合併) ---
+       # --- 6. 專業防呆與雙格式匯出 (PNG + DXF) ---
         st.markdown("---")
         st.write("### 📥 匯出結果")
+        
         if canvas_result.image_data is not None:
-            # 矩陣運算：將標註圖層 (RGBA) 疊加至原始底圖上
+            # === 第一部分：生成 PNG 預覽圖 (平面的像素結果) ===
             drawing_layer = Image.fromarray(canvas_result.image_data.astype('uint8'), 'RGBA')
             merged_img = img.convert("RGBA")
             merged_img.alpha_composite(drawing_layer)
-            merged_img = merged_img.convert("RGB") # 轉回標準格式
+            merged_img = merged_img.convert("RGB")
             
-            # 將合併後的圖片轉為二進制數據提供下載
             img_byte_arr = io.BytesIO()
             merged_img.save(img_byte_arr, format='PNG')
-            img_byte_arr = img_byte_arr.getvalue()
+            png_data = img_byte_arr.getvalue()
 
-            st.download_button(
-                label="✅ 下載標註完成的工程圖 (PNG格式)",
-                data=img_byte_arr,
-                file_name=f"Reviewed_{uploaded_file.name}.png",
-                mime="image/png"
-            )
-            st.info("因果提醒：若是多頁 PDF，請務必『標註完一頁、立刻下載該頁』，再切換至下一頁，以防網頁重整清除數據。")
+            # === 第二部分：生成 DXF 可編輯標註圖層 (向量座標結果) ===
+            import ezdxf
+            dxf_doc = ezdxf.new('R2010') # 建立一個標準 CAD 檔案
+            msp = dxf_doc.modelspace()
+            
+            # 讀取畫布背後的數學向量資料
+            if canvas_result.json_data is not None and "objects" in canvas_result.json_data:
+                canvas_h = img.height
+                
+                for obj in canvas_result.json_data["objects"]:
+                    # Web 座標轉換為 CAD 座標 (Y軸反轉)
+                    def to_cad_y(y): return canvas_h - y
+                    
+                    try:
+                        if obj["type"] == "line":
+                            msp.add_line(
+                                (obj["x1"], to_cad_y(obj["y1"])), 
+                                (obj["x2"], to_cad_y(obj["y2"]))
+                            )
+                        elif obj["type"] == "rect":
+                            x, y = obj["left"], obj["top"]
+                            w, h = obj["width"], obj["height"]
+                            # 建立四個頂點並繪製矩形
+                            pts = [(x, to_cad_y(y)), (x+w, to_cad_y(y)), (x+w, to_cad_y(y+h)), (x, to_cad_y(y+h))]
+                            msp.add_lwpolyline(pts, close=True)
+                        elif obj["type"] == "circle":
+                            x, y = obj["left"] + obj["radius"], obj["top"] + obj["radius"]
+                            msp.add_circle((x, to_cad_y(y)), radius=obj["radius"])
+                    except Exception as e:
+                        pass # 略過無法轉換的複雜自由曲線
+            
+            # 將 DXF 寫入記憶體準備下載
+            dxf_byte_arr = io.BytesIO()
+            dxf_doc.write(dxf_byte_arr)
+            dxf_data = dxf_byte_arr.getvalue()
+
+            # === 第三部分：前端下載按鈕介面 ===
+            col1, col2 = st.columns(2)
+            with col1:
+                st.download_button(
+                    label="✅ 1. 下載 PNG 預覽圖 (回傳確認用)",
+                    data=png_data,
+                    file_name=f"Reviewed_{uploaded_file.name}.png",
+                    mime="image/png"
+                )
+            with col2:
+                st.download_button(
+                    label="📐 2. 下載 DXF 標註圖層 (供專業繪圖端編輯)",
+                    data=dxf_data,
+                    file_name=f"Markup_Layer_{uploaded_file.name}.dxf",
+                    mime="application/dxf"
+                )
+                
+            st.info("實務說明：DXF 格式能提取你畫的直線、矩形與圓形。自由畫筆(freedraw)因點位過於零碎，不寫入 CAD 中以避免圖紙產生雜訊。")
