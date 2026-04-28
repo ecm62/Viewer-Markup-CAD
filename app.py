@@ -11,7 +11,7 @@ import ezdxf
 
 # --- 1. 系統介面與名稱設定 ---
 st.set_page_config(page_title="英俊的小羊 - 工程圖審查系統", layout="wide")
-st.title("🐑 英俊的小羊系列：工程圖面審查與標註系統 V1.6 (視覺對比修正版)")
+st.title("🐑 英俊的小羊系列：工程圖面審查與標註系統 V1.6 (穩定交付版)")
 st.markdown("---")
 
 # --- 2. API 權限與邏輯判定 ---
@@ -79,7 +79,7 @@ if uploaded_file is not None:
             selected_page = st.sidebar.number_input(f"頁面 (總計: {total_pages})", min_value=1, max_value=total_pages, value=1)
             page = doc.load_page(selected_page - 1)
             
-            # 實作決策：強制保留透明圖層 (alpha=True)，防止系統硬塞白底導致白線隱形
+            # 實作決策：強制保留透明圖層 (alpha=True)
             pix = page.get_pixmap(dpi=150, alpha=True)
             img = Image.frombytes("RGBA", [pix.width, pix.height], pix.samples)
         except Exception as e:
@@ -142,10 +142,35 @@ if uploaded_file is not None:
         st.write("### 📥 成果輸出")
         
         if canvas_result.image_data is not None:
+            # 匯出 PNG (使用二進制 BytesIO)
             draw_img = Image.fromarray(canvas_result.image_data.astype('uint8'), 'RGBA')
             bg_img = img.convert("RGBA")
             bg_img.alpha_composite(draw_img)
             png_output = io.BytesIO()
             bg_img.convert("RGB").save(png_output, format='PNG')
 
-            dxf_doc = ezd
+            # 匯出 DXF (使用純文字 StringIO)
+            dxf_doc = ezdxf.new('R2010')
+            msp = dxf_doc.modelspace()
+            canvas_h = img.height
+            
+            if canvas_result.json_data and "objects" in canvas_result.json_data:
+                for obj in canvas_result.json_data["objects"]:
+                    def to_cad_y(y): return canvas_h - y
+                    try:
+                        if obj["type"] == "line":
+                            msp.add_line((obj["x1"], to_cad_y(obj["y1"])), (obj["x2"], to_cad_y(obj["y2"])))
+                        elif obj["type"] == "rect":
+                            x, y, w, h = obj["left"], obj["top"], obj["width"], obj["height"]
+                            pts = [(x, to_cad_y(y)), (x+w, to_cad_y(y)), (x+w, to_cad_y(y+h)), (x, to_cad_y(y+h))]
+                            msp.add_lwpolyline(pts, close=True)
+                        elif obj["type"] == "circle":
+                            msp.add_circle((obj["left"] + obj["radius"], to_cad_y(obj["top"] + obj["radius"])), radius=obj["radius"])
+                    except: pass
+            
+            dxf_output = io.StringIO()
+            dxf_doc.write(dxf_output)
+
+            col1, col2 = st.columns(2)
+            col1.download_button("✅ 下載 PNG 審閱圖", png_output.getvalue(), f"Review_{uploaded_file.name}.png", "image/png")
+            col2.download_button("📐 下載 DXF 標註層", dxf_output.getvalue(), f"Markup_{uploaded_file.name}.dxf", "application/dxf")
