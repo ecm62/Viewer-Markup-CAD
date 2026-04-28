@@ -1,7 +1,7 @@
 import streamlit as st
 import fitz  # PyMuPDF
 from streamlit_drawable_canvas import st_canvas
-from PIL import Image
+from PIL import Image, ImageOps
 import cloudconvert
 import requests
 import io
@@ -11,7 +11,7 @@ import ezdxf
 
 # --- 1. 系統介面與名稱設定 ---
 st.set_page_config(page_title="英俊的小羊 - 工程圖審查系統", layout="wide")
-st.title("🐑 英俊的小羊系列：工程圖面審查與標註系統 V1.5 最終專業版")
+st.title("🐑 英俊的小羊系列：工程圖面審查與標註系統 V1.6 (視覺對比修正版)")
 st.markdown("---")
 
 # --- 2. API 權限與邏輯判定 ---
@@ -78,25 +78,46 @@ if uploaded_file is not None:
             st.sidebar.markdown("---")
             selected_page = st.sidebar.number_input(f"頁面 (總計: {total_pages})", min_value=1, max_value=total_pages, value=1)
             page = doc.load_page(selected_page - 1)
-            pix = page.get_pixmap(dpi=150)
-            img = Image.frombytes("RGB", [pix.width, pix.height], pix.samples)
+            
+            # 實作決策：強制保留透明圖層 (alpha=True)，防止系統硬塞白底導致白線隱形
+            pix = page.get_pixmap(dpi=150, alpha=True)
+            img = Image.frombytes("RGBA", [pix.width, pix.height], pix.samples)
         except Exception as e:
             st.error(f"❌ 解析失敗：{str(e)}")
         
     elif file_ext in ["png", "jpg", "jpeg"]:
-        img = Image.open(uploaded_file)
+        img = Image.open(uploaded_file).convert("RGBA")
         
-    # === 新增：動態等比例縮放引擎 (Auto-Adjust) ===
-    # 因果：防止高解析度工程圖撐爆網頁可視範圍
+    # === 5. 動態等比例縮放引擎 (Auto-Adjust) ===
     if img is not None:
-        MAX_WIDTH = 1200 # 設定網頁適合顯示的最大寬度 (像素)
+        MAX_WIDTH = 1200 
         if img.width > MAX_WIDTH:
             scale_ratio = MAX_WIDTH / img.width
             new_height = int(img.height * scale_ratio)
-            # 使用 LANCZOS 演算法進行高品質縮小，保留工程線條細節
             img = img.resize((MAX_WIDTH, new_height), Image.Resampling.LANCZOS)
 
-    # --- 5. 標註畫布渲染 ---
+        # === 6. 視覺對比度修正引擎 ===
+        st.sidebar.markdown("---")
+        st.sidebar.subheader("👁️ 視覺對比修正")
+        vision_fix = st.sidebar.radio(
+            "若圖紙出現『一片空白』，請切換以下模式救回線條：",
+            ("預設模式 (原圖)", "強制黑底 (修復透明圖的白線)", "負片反轉 (修復白底上的白線)")
+        )
+
+        if vision_fix == "強制黑底 (修復透明圖的白線)":
+            # 矩陣運算：建立純黑背景，將透明圖層疊加上去
+            black_bg = Image.new("RGBA", img.size, (0, 0, 0, 255))
+            black_bg.alpha_composite(img)
+            img = black_bg
+            
+        elif vision_fix == "負片反轉 (修復白底上的白線)":
+            # 矩陣運算：分離透明通道，僅反轉 RGB 顏色
+            r, g, b, a = img.split()
+            rgb_img = Image.merge('RGB', (r, g, b))
+            inverted_img = ImageOps.invert(rgb_img)
+            img = Image.merge('RGBA', inverted_img.split() + (a,))
+
+    # --- 7. 標註畫布渲染 ---
     if img is not None:
         st.sidebar.markdown("---")
         st.sidebar.header("🖌️ 標註工具")
@@ -116,41 +137,15 @@ if uploaded_file is not None:
             key="canvas",
         )
 
-        # --- 6. PNG 與 DXF 雙格式匯出運算 ---
+        # --- 8. PNG 與 DXF 雙格式匯出運算 ---
         st.markdown("---")
         st.write("### 📥 成果輸出")
         
         if canvas_result.image_data is not None:
-            # A. PNG 合併圖層 (使用二進制容器裝載)
             draw_img = Image.fromarray(canvas_result.image_data.astype('uint8'), 'RGBA')
             bg_img = img.convert("RGBA")
             bg_img.alpha_composite(draw_img)
             png_output = io.BytesIO()
             bg_img.convert("RGB").save(png_output, format='PNG')
 
-            # B. DXF 向量座標轉換 (實作 Y 軸反轉矩陣)
-            dxf_doc = ezdxf.new('R2010')
-            msp = dxf_doc.modelspace()
-            canvas_h = img.height
-            
-            if canvas_result.json_data and "objects" in canvas_result.json_data:
-                for obj in canvas_result.json_data["objects"]:
-                    def to_cad_y(y): return canvas_h - y
-                    try:
-                        if obj["type"] == "line":
-                            msp.add_line((obj["x1"], to_cad_y(obj["y1"])), (obj["x2"], to_cad_y(obj["y2"])))
-                        elif obj["type"] == "rect":
-                            x, y, w, h = obj["left"], obj["top"], obj["width"], obj["height"]
-                            pts = [(x, to_cad_y(y)), (x+w, to_cad_y(y)), (x+w, to_cad_y(y+h)), (x, to_cad_y(y+h))]
-                            msp.add_lwpolyline(pts, close=True)
-                        elif obj["type"] == "circle":
-                            msp.add_circle((obj["left"] + obj["radius"], to_cad_y(obj["top"] + obj["radius"])), radius=obj["radius"])
-                    except: pass
-            
-            # C. 修正：使用純文字容器裝載 DXF 數據
-            dxf_output = io.StringIO()
-            dxf_doc.write(dxf_output)
-
-            col1, col2 = st.columns(2)
-            col1.download_button("✅ 下載 PNG 審閱圖", png_output.getvalue(), f"Review_{uploaded_file.name}.png", "image/png")
-            col2.download_button("📐 下載 DXF 標註層", dxf_output.getvalue(), f"Markup_{uploaded_file.name}.dxf", "application/dxf")
+            dxf_doc = ezd
