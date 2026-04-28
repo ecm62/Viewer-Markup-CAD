@@ -59,9 +59,13 @@ if uploaded_file is not None:
                     upload_task_id = job['tasks'][0]['id']
                     upload_task = cloudconvert.Task.find(id=upload_task_id)
                     
-                    with tempfile.NamedTemporaryFile(delete=False, suffix=".dwg") as tmp:
+                        with tempfile.NamedTemporaryFile(delete=False, suffix=".dwg") as tmp:
                         tmp.write(uploaded_file.getvalue())
                         tmp_path = tmp.name
+                        
+                    # 🌟 修正處：將多餘的參數移除，直接把帶有 .dwg 副檔名的暫存路徑交給 file_name
+                    cloudconvert.Task.upload(file_name=tmp_path, task=upload_task)
+                    os.remove(tmp_path) # 上傳完畢後刪除暫存檔
                         
                     cloudconvert.Task.upload(file_name="temp.dwg", path=tmp_path, task=upload_task)
                     os.remove(tmp_path) # 上傳完畢後刪除暫存檔
