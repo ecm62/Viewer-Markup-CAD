@@ -11,7 +11,7 @@ import ezdxf
 
 # --- 1. 系統介面與名稱設定 ---
 st.set_page_config(page_title="英俊的小羊 - 工程圖審查系統", layout="wide")
-st.title("🐑 英俊的小羊系列：工程圖面審查與標註系統 V1.4 專業版")
+st.title("🐑 英俊的小羊系列：工程圖面審查與標註系統 V1.5 最終專業版")
 st.markdown("---")
 
 # --- 2. API 權限與邏輯判定 ---
@@ -86,6 +86,16 @@ if uploaded_file is not None:
     elif file_ext in ["png", "jpg", "jpeg"]:
         img = Image.open(uploaded_file)
         
+    # === 新增：動態等比例縮放引擎 (Auto-Adjust) ===
+    # 因果：防止高解析度工程圖撐爆網頁可視範圍
+    if img is not None:
+        MAX_WIDTH = 1200 # 設定網頁適合顯示的最大寬度 (像素)
+        if img.width > MAX_WIDTH:
+            scale_ratio = MAX_WIDTH / img.width
+            new_height = int(img.height * scale_ratio)
+            # 使用 LANCZOS 演算法進行高品質縮小，保留工程線條細節
+            img = img.resize((MAX_WIDTH, new_height), Image.Resampling.LANCZOS)
+
     # --- 5. 標註畫布渲染 ---
     if img is not None:
         st.sidebar.markdown("---")
@@ -111,7 +121,7 @@ if uploaded_file is not None:
         st.write("### 📥 成果輸出")
         
         if canvas_result.image_data is not None:
-            # A. PNG 合併圖層
+            # A. PNG 合併圖層 (使用二進制容器裝載)
             draw_img = Image.fromarray(canvas_result.image_data.astype('uint8'), 'RGBA')
             bg_img = img.convert("RGBA")
             bg_img.alpha_composite(draw_img)
@@ -137,7 +147,8 @@ if uploaded_file is not None:
                             msp.add_circle((obj["left"] + obj["radius"], to_cad_y(obj["top"] + obj["radius"])), radius=obj["radius"])
                     except: pass
             
-            dxf_output = io.BytesIO()
+            # C. 修正：使用純文字容器裝載 DXF 數據
+            dxf_output = io.StringIO()
             dxf_doc.write(dxf_output)
 
             col1, col2 = st.columns(2)
