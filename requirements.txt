@@ -2,3 +2,5 @@ streamlit
 PyMuPDF
 streamlit-drawable-canvas
 Pillow
+cloudconvert
+requests
