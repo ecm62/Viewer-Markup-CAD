@@ -10,7 +10,7 @@ import os
 
 # --- 1. 系統介面與名稱設定 ---
 st.set_page_config(page_title="英俊的小羊 - 工程圖審查系統", layout="wide")
-st.title("🐑 英俊的小羊系列：工程圖面審查與標註系統 V1.3")
+st.title("🐑 英俊的小羊系列：工程圖面審查與標註系統 V1.3 穩定版")
 st.markdown("---")
 
 # --- 2. API 權限與邏輯判定 ---
@@ -59,15 +59,11 @@ if uploaded_file is not None:
                     upload_task_id = job['tasks'][0]['id']
                     upload_task = cloudconvert.Task.find(id=upload_task_id)
                     
-                        with tempfile.NamedTemporaryFile(delete=False, suffix=".dwg") as tmp:
+                    with tempfile.NamedTemporaryFile(delete=False, suffix=".dwg") as tmp:
                         tmp.write(uploaded_file.getvalue())
                         tmp_path = tmp.name
                         
-                    # 🌟 修正處：將多餘的參數移除，直接把帶有 .dwg 副檔名的暫存路徑交給 file_name
                     cloudconvert.Task.upload(file_name=tmp_path, task=upload_task)
-                    os.remove(tmp_path) # 上傳完畢後刪除暫存檔
-                        
-                    cloudconvert.Task.upload(file_name="temp.dwg", path=tmp_path, task=upload_task)
                     os.remove(tmp_path) # 上傳完畢後刪除暫存檔
                     
                     # 等待伺服器運算完成
